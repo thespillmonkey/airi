@@ -106,6 +106,7 @@
     "@proj-airi/model-driver-lipsync": "workspace:^",
     "@proj-airi/model-driver-magic-live2d": "workspace:^",
     "@proj-airi/motion-driver-magic": "workspace:^",
+    "@proj-airi/openclaw-bridge": "workspace:*",
     "@proj-airi/pipelines-audio": "workspace:^",
     "@proj-airi/provider-inference": "workspace:^",
     "@proj-airi/server-sdk": "workspace:^",

@@ -5,11 +5,13 @@ import { refManualReset } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { computed, watch } from 'vue'
 
+import { useAgentModeStore } from '../agent-mode'
 import { useProviderStore } from '../providers/provider'
 import { useConsciousnessSettingsStore } from './consciousness-settings'
 
 export const useConsciousnessStore = defineStore('consciousness', () => {
   const providersStore = useProviderStore()
+  const agentMode = useAgentModeStore()
   const settingsStore = useConsciousnessSettingsStore()
 
   // Pinia synchronization owns live cross-window state. localStorage remains
@@ -149,7 +151,7 @@ export const useConsciousnessStore = defineStore('consciousness', () => {
 
   /** Whether chat can send. The `prompt-api` provider runs without a selected model. */
   const chatReady = computed(() => {
-    return !!activeProvider.value && (!!activeModel.value || activeProvider.value === 'prompt-api')
+    return agentMode.active ? agentMode.ready : !!activeProvider.value && (!!activeModel.value || activeProvider.value === 'prompt-api')
   })
 
   async function resetState() {

@@ -19,6 +19,12 @@ export interface VoiceMessageSnapshot {
 /** The longest time a submitted message waits for its transcript. Then transcription stops, and the chat transcribes the file. */
 const TRANSCRIPT_LIMIT_MS = 60_000
 
+/** Transcript-only channels wait for STT and reject work whose conversation mode changed during that wait. */
+export interface VoiceMessageSendOptions {
+  requireTranscript?: boolean
+  isCurrent?: () => boolean
+}
+
 /** The settled transcript of a recording. `undefined` means transcription failed, stopped, or is not used. */
 type Transcript = string | undefined
 
@@ -37,7 +43,7 @@ class NoSpeechError extends Error {
  * With `transcribe`, the same captured audio is also transcribed while it records. A model without audio input reads the
  * transcript, so the chat does not transcribe the stored file again.
  *
- * A send never waits for the transcript, so the chat shows the message at once. A transcript that is ready goes with
+ * Audio-capable channels submit at once. Transcript-only channels can require STT before submission. A transcript that is ready goes with
  * the submit. A later one goes to `deliverTranscript`, and the message stays `transcribing` until then.
  *
  * `transcribe` resolves with an empty string when it completed and recognized no speech. Before the submit, the send
@@ -120,7 +126,7 @@ export class VoiceMessage {
   }
 
   /** `text` goes into the same user message as the recording. A retry while a send runs keeps the first text. */
-  send(text = ''): Promise<{ messageId: string }> {
+  send(text = '', options: VoiceMessageSendOptions = {}): Promise<{ messageId: string }> {
     if (this.receipt)
       return Promise.resolve(this.receipt)
     if (this.sending)
@@ -130,7 +136,16 @@ export class VoiceMessage {
       return Promise.reject(new Error('Voice message is not ready'))
     this.change({ ...this.current, phase: 'sending', error: undefined })
     // Defer transport invocation until the in-flight promise is installed. Synchronous adapters cannot bypass deduplication.
-    this.sending = Promise.resolve().then(() => {
+    this.sending = Promise.resolve().then(async () => {
+      if (options.requireTranscript) {
+        if (!this.transcript)
+          throw new Error('Configure speech recognition before sending a voice message to this channel')
+        await this.waitForTranscript()
+        if (this.settledTranscript?.value === undefined)
+          throw new Error('Configured speech recognition did not return a usable transcript')
+      }
+      if (options.isCurrent && !options.isCurrent())
+        throw new Error('Conversation mode changed before the voice message was submitted')
       const settled = this.settledTranscript
       if (settled?.value === '')
         throw new NoSpeechError()
@@ -154,6 +169,25 @@ export class VoiceMessage {
       throw error
     }).finally(() => { this.sending = undefined })
     return this.sending
+  }
+
+  private async waitForTranscript() {
+    const signal = this.transcription.signal
+    signal.throwIfAborted()
+    let rejectAbort: (() => void) | undefined
+    const aborted = new Promise<never>((_resolve, reject) => {
+      rejectAbort = () => reject(new Error('Speech recognition stopped before the transcript was ready'))
+      signal.addEventListener('abort', rejectAbort, { once: true })
+    })
+    const timer = setTimeout(() => this.transcription.abort('Speech recognition timed out'), TRANSCRIPT_LIMIT_MS)
+    try {
+      await Promise.race([this.transcript, aborted])
+    }
+    finally {
+      clearTimeout(timer)
+      if (rejectAbort)
+        signal.removeEventListener('abort', rejectAbort)
+    }
   }
 
   /** Hands a transcript that settles after the submit to the chat. Transcription stops after {@link TRANSCRIPT_LIMIT_MS}. */

@@ -23,6 +23,10 @@ export const useChatStreamStore = defineStore('chat-stream', () => {
     activeTurns.value = turns
   }
 
+  function setRemoteMessage(sessionId: string, message: StreamingAssistantMessage = emptyMessage) {
+    remoteMessages.value = { ...remoteMessages.value, [sessionId]: message }
+  }
+
   function finalizeStream(fullText?: string) {
     const sessionId = chatSession.activeSessionId
     if (streamingMessage.value.slices.length > 0)
@@ -38,6 +42,7 @@ export const useChatStreamStore = defineStore('chat-stream', () => {
 
   return {
     streamingMessage,
+    setRemoteMessage,
     activeTurns,
     updateActiveTurns,
     finalizeStream,

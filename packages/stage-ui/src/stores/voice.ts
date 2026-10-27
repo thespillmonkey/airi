@@ -24,6 +24,7 @@ import { createVoiceEndJudgePlugin } from '../libs/voice/voice-end-judge-plugin'
 import { createVoiceRephrasePlugin } from '../libs/voice/voice-rephrase-plugin'
 import { getSpeechBusContext, voiceGenerationEnded, voiceGetTurns, voiceInputCommand, voiceInputLevel, voiceInterrupt, voiceLevelMonitor, voiceRequestSnapshot, voiceRequestTurns, voiceSnapshotChanged, voiceSpeechCommand, voiceTurnsChanged } from '../services/speech/bus'
 import { SileroVad } from '../workers/vad/silero-vad'
+import { useAgentModeStore } from './agent-mode'
 import { useLlmStreamingControlStore } from './ai/chat-llm/streaming-control'
 import { useAudioContext, useSpeakingStore } from './audio'
 import { useChatStore } from './chat'
@@ -50,6 +51,7 @@ const VOICE_END_SILENCE = { pauseMs: 1200, graceMs: 3000 } as const
 
 /** Application wiring owns presentation and durable chat adapters. The controller owns voice lifecycles. */
 export const useVoiceStore = defineStore('voice', () => {
+  const agentMode = useAgentModeStore()
   const devices = useSettingsAudioDevice()
   const hearing = useHearingStore()
   const chat = useChatStore()
@@ -113,12 +115,12 @@ export const useVoiceStore = defineStore('voice', () => {
   })
   const { rephrase } = useVoiceRephrase()
   controller.use(
-    createVoiceRephrasePlugin({ enabled: () => hearing.rephraseEnabled, rephrase, timeoutMs: VOICE_REPHRASE_TIMEOUT_MS }),
+    createVoiceRephrasePlugin({ enabled: () => !agentMode.active && hearing.rephraseEnabled, rephrase, timeoutMs: VOICE_REPHRASE_TIMEOUT_MS }),
     { onError: event => report(event.error) },
   )
   const { judge } = useVoiceEndJudge()
   controller.use(
-    createVoiceEndJudgePlugin({ enabled: () => hearing.endJudgeEnabled, judge, pauseMs: VOICE_END_SILENCE.pauseMs }),
+    createVoiceEndJudgePlugin({ enabled: () => !agentMode.active && hearing.endJudgeEnabled, judge, pauseMs: VOICE_END_SILENCE.pauseMs }),
     { grants: ['input-control'], onError: event => report(event.error) },
   )
 

@@ -190,3 +190,28 @@ Actual browser audio playback was captured after the AIRI volume stage. Syntheti
 microphone fixtures exercise capture and STT plumbing; they do not prove physical
 microphone acoustics, speaker-to-microphone echo cancellation, or every supported
 platform. Hardware checks remain distinct acceptance evidence.
+
+## Optional persistent loopback tunnel
+
+For a Mac AIRI client and Linux Gateway, an existing verified key-only SSH route
+from Linux to the Mac can carry a reverse loopback listener. No Gateway credential
+is embedded in this tunnel, and the AIRI connection token is still mandatory.
+The [example user service](examples/airi-mac-tunnel.service) requires an environment
+file at `~/.config/airi-openclaw/tunnel.env` on Linux:
+
+```ini
+AIRI_MAC_SSH_HOST=your-verified-mac-ssh-alias
+AIRI_CLIENT_PORT=18991
+OPENCLAW_LOCAL_PORT=18789
+```
+
+Choose free client and actual Gateway ports. Copy the unit to the Linux user's
+`~/.config/systemd/user/`, run `systemctl --user daemon-reload`, then
+`systemctl --user enable --now airi-mac-tunnel.service`. Use
+`ws://127.0.0.1:18991/plugins/airi/v1` in AIRI for these example values.
+Check `systemctl --user status airi-mac-tunnel.service` and a real authenticated
+AIRI connection; a running SSH process alone is not a channel-readiness check.
+
+Disable it with `systemctl --user disable --now airi-mac-tunnel.service`.
+This is optional deployment plumbing, not a hardcoded transport dependency. A
+properly secured configurable `wss` endpoint works without this service.

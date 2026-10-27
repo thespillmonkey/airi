@@ -28,14 +28,17 @@ import { useBroadcastChannel, useEventListener } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onUnmounted, ref, shallowRef, watch } from 'vue'
 
+import AgentModePanel from './agent-mode-panel.vue'
 import StageAvatarModelMissing from './stage-avatar-model-missing.vue'
 import StageRenderError from './stage-render-error.vue'
 
 // import { useDuckDb } from '../../composables/use-duck-db'
+import { useAgentPresentation } from '../../composables/agent-presentation'
 import { Emotion, EMOTION_EmotionMotionName_value, EMOTION_VRMExpressionName_value, EmotionThinkMotionName } from '../../constants/emotions'
 import { live2dMotionMagicProfiles, useLive2DMotionMagic, useLive2DMotionMagicSettings } from '../../features/motions/live2d'
 import { syncedRoles, usePiniaSynced } from '../../libs/pinia/synced-context'
 import { getSpeechBusContext, speechOutputGetPlaybackState, speechOutputPlaybackStateChangedEvent } from '../../services/speech/bus'
+import { useAgentModeStore } from '../../stores/agent-mode'
 import { useLlmStreamingControlStore } from '../../stores/ai/chat-llm/streaming-control'
 import { useAudioContext, useSpeakingStore } from '../../stores/audio'
 import { useBackgroundStore } from '../../stores/background'
@@ -78,6 +81,7 @@ const spineSceneRef = ref<InstanceType<typeof SpineScene>>()
 const tachieSceneRef = ref<InstanceType<typeof TachieScene>>()
 const mmdSceneRef = ref<InstanceType<typeof MMDScene>>()
 
+const agentMode = useAgentModeStore()
 const settingsStore = useSettings()
 const {
   stageModelRenderer,
@@ -293,7 +297,7 @@ const { activeBackgroundUrl } = storeToRefs(backgroundStore)
 
 const { currentMotion } = storeToRefs(useLive2dParams())
 const live2d = createLive2D({
-  controlPolicy: () => selectedAvatarModel.value?.type === 'live2d'
+  controlPolicy: () => !agentMode.active && selectedAvatarModel.value?.type === 'live2d'
     ? selectedAvatarModel.value.config.controls
     : undefined,
 })
@@ -439,6 +443,32 @@ watch(() => voice.activeTurns, (turns) => {
 })
 
 const cards = useAiriCardStore()
+const presentation = useAgentPresentation({
+  state: componentState,
+  error: stageRenderError,
+  live2d,
+  async stopSpeech() {
+    if (agentMode.active) {
+      await agentMode.pauseSpeech()
+      return
+    }
+    for (const turn of voice.activeTurns)
+      await voice.interrupt([turn], 'Presentation changed').done
+  },
+})
+let presentationMounted = true
+let releasePresentation: (() => void) | undefined
+void agentMode.attachPresentation(presentation).then((release) => {
+  if (presentationMounted)
+    releasePresentation = release
+  else
+    release()
+}).catch(error => reportStageRenderError(error))
+onUnmounted(() => {
+  presentationMounted = false
+  releasePresentation?.()
+})
+
 const disconnectVoiceOutput = voice.connectOutput((turn) => {
   const output = {
     playback,
@@ -468,7 +498,11 @@ const disconnectVoiceOutput = voice.connectOutput((turn) => {
     const characterId = chatSession.sessionMetas[turn.sessionId]?.characterId
     if (!characterId)
       throw new Error('The response session has no character')
-    return speechStore.createOutput(turn, cards.getModules(characterId).speech, output, audioContext)
+    const selection = agentMode.active ? presentation.readVoice() : undefined
+    const speechSelection = selection
+      ? { provider: selection.providerId, model: selection.modelId, voice_id: selection.voiceId }
+      : cards.getModules(characterId).speech
+    return speechStore.createOutput(turn, speechSelection, output, audioContext)
   }
   catch (error) {
     // Text replies remain available when optional speech output is not configured.
@@ -837,5 +871,6 @@ defineExpose({
         @retry="retryStageRenderer"
       />
     </div>
+    <AgentModePanel />
   </div>
 </template>

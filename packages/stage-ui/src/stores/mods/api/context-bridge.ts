@@ -17,6 +17,7 @@ import { computed, ref, shallowReactive, toRaw, watch } from 'vue'
 import { ChatAssetTooLargeError, chatEventAttachmentsOf, MAX_CHAT_ASSET_BYTES, readChatAsset } from '../../../libs/chat-assets'
 import { getSpeechBusContext, voiceGenerationEnded } from '../../../services/speech/bus'
 import { getEventSourceKey, getMetadataSourceLabel } from '../../../utils/event-source'
+import { useAgentModeStore } from '../../agent-mode'
 import { useLlmStreamingControlStore } from '../../ai/chat-llm/streaming-control'
 import { useCharacterOrchestratorStore } from '../../character'
 import { useChatStore } from '../../chat'
@@ -43,6 +44,7 @@ export function normalizeContextSnapshot<C extends Pick<ChatStreamEventContext, 
 }
 
 export const useContextBridgeStore = defineStore('mods:api:context-bridge', () => {
+  const agentMode = useAgentModeStore()
   const consumerRegistrationEvents = [
     'input:text',
     'input:text:voice',
@@ -255,6 +257,8 @@ export const useContextBridgeStore = defineStore('mods:api:context-bridge', () =
   }
 
   async function handleSparkNotifyReactionLocal(options: SparkNotifyReactionOptions, identity?: { id?: string, eventId?: string }) {
+    if (agentMode.active)
+      return ''
     const event: WebSocketEventOf<'spark:notify'> = {
       type: 'spark:notify',
       source: options.source ?? 'plugin-module-host',

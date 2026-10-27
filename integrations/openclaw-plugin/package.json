@@ -1,0 +1,47 @@
+{
+  "name": "@proj-airi/openclaw-plugin",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "AIRI conversation channel and presentation tools for OpenClaw",
+  "license": "MIT",
+  "files": [
+    "LICENSE",
+    "README.md",
+    "THIRD-PARTY-NOTICES.md",
+    "dist",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test:run": "vitest run --config vitest.config.ts",
+    "pack:standalone": "node scripts/pack.mjs"
+  },
+  "peerDependencies": {
+    "openclaw": "2026.10.3"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@proj-airi/openclaw-bridge": "workspace:^",
+    "@valibot/to-json-schema": "catalog:",
+    "valibot": "catalog:",
+    "ws": "catalog:"
+  },
+  "devDependencies": {
+    "@types/ws": "catalog:"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.mjs"
+    ],
+    "channel": {
+      "id": "airi",
+      "label": "AIRI",
+      "blurb": "Talk to an OpenClaw agent through AIRI."
+    }
+  }
+}

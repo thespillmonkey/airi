@@ -1,0 +1,30 @@
+{
+  "name": "@proj-airi/openclaw-bridge",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Validated OpenClaw channel contracts and reconnectable AIRI client",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contracts": "./src/contracts.ts",
+    "./client": "./src/client.ts"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@moeru/eventa": "catalog:",
+    "@moeru/std": "catalog:",
+    "valibot": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/ws": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:vitest",
+    "ws": "catalog:"
+  }
+}

@@ -4,10 +4,11 @@ import type { SyncedPiniaRuntime } from 'pinia-plugin-synced'
 
 import { createSparkNotifyAgent, createSparkNotifyReactionPlugin } from '@proj-airi/core-agent/agents/spark-notify'
 import { defineStore, storeToRefs } from 'pinia'
-import { onScopeDispose, ref } from 'vue'
+import { onScopeDispose, ref, watch } from 'vue'
 
 import { useCharacterNotebookStore, useCharacterStore } from '../'
 import { useAiriRuntimePrompt } from '../../../composables/use-airi-runtime-prompt'
+import { useAgentModeStore } from '../../agent-mode'
 import { useLLM } from '../../ai/chat-llm/llm'
 import { useModsServerChannelStore } from '../../mods/api/channel-server'
 import { useConsciousnessStore } from '../../modules/consciousness'
@@ -15,6 +16,12 @@ import { useConsciousnessStore } from '../../modules/consciousness'
 export { sparkNotifyCommandSchema } from '@proj-airi/core-agent/agents/spark-notify'
 
 export const useCharacterOrchestratorStore = defineStore('character-orchestrator', () => {
+  const agentMode = useAgentModeStore()
+  let activeGeneration: AbortController | undefined
+  watch(() => agentMode.active, (active) => {
+    if (active)
+      activeGeneration?.abort('Agent Mode selected')
+  })
   const { stream } = useLLM()
   const consciousnessStore = useConsciousnessStore()
   const { activeProvider, activeModel } = storeToRefs(consciousnessStore)
@@ -56,6 +63,7 @@ export const useCharacterOrchestratorStore = defineStore('character-orchestrator
         request.selectedChat.provider,
         request.conversation,
         {
+          abortSignal: activeGeneration?.signal,
           tools: request.tools,
           providerId: request.selectedChat.providerId,
           supportsTools: request.policy.supportsTools,
@@ -67,8 +75,14 @@ export const useCharacterOrchestratorStore = defineStore('character-orchestrator
     },
     plugins: [
       createSparkNotifyReactionPlugin({
-        onDelta: (eventId, text) => characterStore.onSparkNotifyReactionStreamEvent(eventId, text),
-        onEnd: (eventId, text) => characterStore.onSparkNotifyReactionStreamEnd(eventId, text),
+        onDelta: (eventId, text) => {
+          if (!agentMode.active)
+            characterStore.onSparkNotifyReactionStreamEvent(eventId, text)
+        },
+        onEnd: (eventId, text) => {
+          if (!agentMode.active)
+            characterStore.onSparkNotifyReactionStreamEnd(eventId, text)
+        },
       }),
     ],
   })
@@ -120,6 +134,8 @@ export const useCharacterOrchestratorStore = defineStore('character-orchestrator
   }
 
   async function processSparkNotify(event: WebSocketEventOf<'spark:notify'>, control?: SparkNotifyResponseControl) {
+    if (agentMode.active)
+      return undefined
     const providerId = activeProvider.value
     const model = activeModel.value
     if (!providerId || !model) {
@@ -128,6 +144,10 @@ export const useCharacterOrchestratorStore = defineStore('character-orchestrator
     }
 
     const provider = await consciousnessStore.getChatProviderInstance(providerId)
+    if (agentMode.active)
+      return undefined
+    const generation = new AbortController()
+    activeGeneration = generation
     processing.value = true
 
     try {
@@ -142,6 +162,7 @@ export const useCharacterOrchestratorStore = defineStore('character-orchestrator
         runtimePrompt: runtimePrompt.value,
         control,
       })
+      generation.signal.throwIfAborted()
       if (!result.commands.length)
         return result
 
@@ -156,6 +177,7 @@ export const useCharacterOrchestratorStore = defineStore('character-orchestrator
     }
     finally {
       processing.value = false
+      activeGeneration = undefined
     }
   }
 
@@ -214,7 +236,7 @@ export const useCharacterOrchestratorStore = defineStore('character-orchestrator
   }
 
   async function tick() {
-    if (!leadership?.isLeader() || processing.value)
+    if (agentMode.active || !leadership?.isLeader() || processing.value)
       return
 
     const now = Date.now()

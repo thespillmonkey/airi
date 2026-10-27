@@ -9,7 +9,9 @@ import { onScopeDispose, shallowRef, watch } from 'vue'
 
 import { VoiceMessage } from '../libs/voice/voice-message'
 import { getSpeechBusContext, voiceMessageCommand, voiceMessageDropped, voiceMessagesChanged, voiceRequestMessages } from '../services/speech/bus'
+import { useAgentModeStore } from './agent-mode'
 import { useChatStore } from './chat'
+import { useChatSessionStore } from './chat/session-store'
 import { useHearingStore } from './modules/hearing'
 import { useSettingsAudioDevice } from './settings/audio-device'
 import { useVoiceCaptureLeaseStore } from './voice-capture-lease'
@@ -32,8 +34,10 @@ function encoded(message: VoiceMessage) {
 
 /** The audio host retains attachment drafts. Windows only render snapshots and send explicit commands. */
 export const useVoiceMessagesStore = defineStore('voice-messages', () => {
+  const agentMode = useAgentModeStore()
   const devices = useSettingsAudioDevice()
   const chat = useChatStore()
+  const sessions = useChatSessionStore()
   const hearing = useHearingStore()
   const captureLease = useVoiceCaptureLeaseStore()
   const messages = new Map<string, VoiceMessage>()
@@ -98,6 +102,13 @@ export const useVoiceMessagesStore = defineStore('voice-messages', () => {
     return true
   }
 
+  async function sendMessage(message: VoiceMessage, text = '') {
+    const mode = agentMode.mode
+    const isCurrent = agentMode.captureInputContext()
+    const sessionId = sessions.activeSessionId
+    return message.send(text, { requireTranscript: mode === 'agent', isCurrent: () => isCurrent() && sessions.activeSessionId === sessionId })
+  }
+
   function connect() {
     const stops = [
       bus.on(voiceRequestMessages, publish),
@@ -115,7 +126,7 @@ export const useVoiceMessagesStore = defineStore('voice-messages', () => {
               // A failed send keeps the message `ready` with its error. The snapshot reports it, and the control can retry.
               // A recording without speech is cancelled and leaves the list, so only the command result can report it.
               if (message.snapshot.phase === 'ready') {
-                await message.send().catch((error: unknown) => {
+                await sendMessage(message).catch((error: unknown) => {
                   if (message.snapshot.phase === 'cancelled')
                     throw error
                 })
@@ -123,7 +134,7 @@ export const useVoiceMessagesStore = defineStore('voice-messages', () => {
             }
             break
           case 'send':
-            await message.send(command.text)
+            await sendMessage(message, command.text)
             break
           case 'discard': return { status: message.cancel() === 'cancelled' ? 'accepted' : 'closed' }
         }

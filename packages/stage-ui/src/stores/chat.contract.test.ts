@@ -23,12 +23,23 @@ import {
 } from '../libs/product-signals/headers'
 import { composeDrawCardPrompt } from '../tools/draw-card'
 import { composeMemoryPrompt } from '../tools/memory'
+import { useAgentModeStore } from './agent-mode'
 import { useChatStore } from './chat'
 import { CHAT_FORMAT_RULES } from './chat/prompt-recipe'
 import { useContextObservabilityStore } from './devtools/context-observability'
 import { useMemoryStore } from './memory'
 import { useConsciousnessSettingsStore } from './modules/consciousness-settings'
 import { useRecipesStore } from './recipes'
+
+const remotePlayback = vi.hoisted(() => ({
+  activeTurns: [] as Array<{ sessionId: string, turnId: string }>,
+  cancel: vi.fn(),
+  finishResponse: vi.fn(async () => {}),
+  interrupt: vi.fn(),
+}))
+vi.mock('./voice', () => ({
+  useVoiceStore: () => ({ ...remotePlayback, getSpeech: () => ({ cancel: remotePlayback.cancel }) }),
+}))
 
 const ioTracerMocks = vi.hoisted(() => {
   /** The registered turn spans, by turn ID, like the tracer registry. */
@@ -315,6 +326,19 @@ function storedToolImageMessage(): ChatHistoryItem {
 }
 
 describe('chat store contract', () => {
+  it('drains completed-but-still-speaking output before a presentation change without cancelling agent reasoning', async () => {
+    useChatStore()
+    remotePlayback.activeTurns = [{ sessionId: 'session-1', turnId: 'already-complete-remote-turn' }]
+    remotePlayback.cancel.mockClear()
+    remotePlayback.finishResponse.mockClear()
+    remotePlayback.interrupt.mockClear()
+    await useAgentModeStore().pauseSpeech()
+    expect(remotePlayback.cancel).toHaveBeenCalledWith('Presentation or connection changed')
+    expect(remotePlayback.finishResponse).toHaveBeenCalledWith({ sessionId: 'session-1', turnId: 'already-complete-remote-turn' })
+    expect(remotePlayback.interrupt).not.toHaveBeenCalled()
+    remotePlayback.activeTurns = []
+  })
+
   beforeEach(() => {
     cardPrompt.value = 'system prompt'
     setActivePinia(createPinia())

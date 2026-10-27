@@ -4,7 +4,7 @@ import type { WebSocketEventInputs } from '@proj-airi/server-sdk'
 import type { Message } from '@xsai/shared-chat'
 import type { SyncedPiniaRuntime } from 'pinia-plugin-synced'
 
-import type { ChatHistoryItem, ChatToolReference } from '../types/chat'
+import type { ChatHistoryItem, ChatStreamEventContext, ChatToolReference, StreamingAssistantMessage } from '../types/chat'
 import type { ChatSessionTaskStatus, StoredVoiceInterruption } from '../types/chat-session'
 import type { ToolCallRerunPayload } from './tool-call-rerun'
 
@@ -42,6 +42,7 @@ import { createProposeRecipeTool } from '../tools/propose-recipe'
 import { createSearchIconsTool } from '../tools/search-icons'
 import { createUseRecipeTool } from '../tools/use-recipe'
 import { createWakeWordTool } from '../tools/wake-words'
+import { useAgentModeStore } from './agent-mode'
 import { useLLM } from './ai/chat-llm/llm'
 import { resolveLlmTools } from './ai/chat-llm/tool-resolver'
 import { useLlmToolsStore } from './ai/chat-llm/tools'
@@ -260,6 +261,7 @@ export const useChatStore = defineStore('chat', () => {
   const { t } = useI18n()
   const runtimePrompt = useAiriRuntimePrompt()
   const authStore = useAuthStore()
+  const agentMode = useAgentModeStore()
   const llmStore = useLLM()
   const llmToolsStore = useLlmToolsStore()
   const llmToolsetPromptsStore = useLlmToolsetPromptsStore()
@@ -310,6 +312,14 @@ export const useChatStore = defineStore('chat', () => {
 
   const activeTurns = shallowRef<readonly { sessionId: string, turnId: string }[]>([])
   const sending = shallowRef(false)
+  let localRuntimeTurns: typeof activeTurns.value = []
+  let localRuntimeSending = false
+  const remoteActiveTurns = shallowRef<typeof activeTurns.value>([])
+  function updateRemoteTurns(turns: typeof activeTurns.value) {
+    remoteActiveTurns.value = turns
+    activeTurns.value = [...localRuntimeTurns, ...turns]
+    sending.value = localRuntimeSending || turns.length > 0
+  }
   const activeSendSessionId = shallowRef<string>()
   const activeStreamingMessage = computed(() => chatStream.activeTurns.find(turn => turn.sessionId === activeSendSessionId.value)?.message)
   const pendingQueuedSendCount = shallowRef(0)
@@ -482,6 +492,8 @@ export const useChatStore = defineStore('chat', () => {
    * Resolves once the task starts or is refused. When it settles, its result reaches the parent conversation as a notice.
    */
   async function startRecipe(recipe: Recipe, request: { parentSessionId: string, task: string }): Promise<{ status: 'started' } | { status: 'refused', reason: string }> {
+    if (agentMode.active)
+      return { status: 'refused', reason: 'OpenClaw owns decisions in Agent Mode' }
     // An empty send never runs, so an empty task ends as done without doing anything.
     if (!request.task.trim())
       return { status: 'refused', reason: 'A background recipe needs a task.' }
@@ -886,10 +898,11 @@ export const useChatStore = defineStore('chat', () => {
   function syncRuntimeState(state: ChatOrchestratorRuntimeState) {
     if (activeTurns.value.length !== state.activeTurns.length
       || activeTurns.value.some((turn, index) => turn.sessionId !== state.activeTurns[index].sessionId || turn.turnId !== state.activeTurns[index].turnId)) {
-      activeTurns.value = state.activeTurns.map(({ sessionId, turnId }) => ({ sessionId, turnId }))
+      localRuntimeTurns = state.activeTurns.map(({ sessionId, turnId }) => ({ sessionId, turnId }))
     }
     chatStream.updateActiveTurns(state.activeTurns)
-    sending.value = state.sending
+    localRuntimeSending = state.sending
+    updateRemoteTurns(remoteActiveTurns.value)
     activeSendSessionId.value = state.activeSendSessionId
     pendingQueuedSendCount.value = state.pendingQueuedSendCount
   }
@@ -1097,6 +1110,8 @@ export const useChatStore = defineStore('chat', () => {
     options: ChatOrchestratorSendOptions,
     targetSessionId?: string,
   ) {
+    if (agentMode.active)
+      throw new Error('Local ingestion is suspended in Agent Mode')
     const sessionId = targetSessionId ?? activeSessionId.value
     const generation = chatSession.getSessionGeneration(sessionId)
     const messageId = options.messageId ?? nanoid()
@@ -1204,6 +1219,8 @@ export const useChatStore = defineStore('chat', () => {
    * `invoked` holds the recipes that this message invoked by keyword.
    */
   async function prepareSend(payload: ChatSendPayload, signal: AbortSignal, voice: boolean, extra: HostSendOptions = {}, invoked: readonly Recipe[] = []): Promise<ChatOrchestratorSendOptions> {
+    if (agentMode.active)
+      throw new Error('Local generation is suspended in Agent Mode')
     if (!await chatSession.loadSession(payload.sessionId))
       throw new Error('Failed to load the target chat session')
     const reachable = reachableRecipesFor(payload, extra, invoked)
@@ -1307,7 +1324,142 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // Remote turns own only transcript projection and speech. No AIRI prompts, recipes, or tools reach this path.
+  const remoteRequests = new Map<string, { context: ChatStreamEventContext, message: StreamingAssistantMessage, started: boolean }>()
+
+  async function finishRemote(messageId: string, interrupted = false) {
+    const request = remoteRequests.get(messageId)
+    if (!request)
+      return
+    remoteRequests.delete(messageId)
+    updateRemoteTurns(remoteActiveTurns.value.filter(turn => turn.turnId !== messageId))
+    request.message.completedAt = Date.now()
+    if (interrupted)
+      request.message.interrupted = true
+    if (request.message.content)
+      await chatSession.storeMessage(request.context.sessionId, { ...request.message, id: `openclaw:${messageId}` })
+    chatStream.setRemoteMessage(request.context.sessionId)
+    const settled = { sessionId: request.context.sessionId, turnId: request.context.turnId, status: interrupted ? 'cancelled' as const : 'finished' as const }
+    settleOwnedTurnSpan(settled)
+    getSpeechBusContext().emit(voiceGenerationEnded, settled)
+    if (interrupted) {
+      await import('./voice').then(({ useVoiceStore }) => useVoiceStore().interrupt([{ sessionId: request.context.sessionId, turnId: request.context.turnId }], 'OpenClaw response stopped').done)
+    }
+    else {
+      await runtime.hooks.emitStreamEndHooks(request.context)
+      await runtime.hooks.emitAssistantResponseEndHooks(String(request.message.content), request.context)
+      await runtime.hooks.emitAssistantMessageHooks(request.message, String(request.message.content), request.context)
+    }
+  }
+
+  agentMode.attachChat({
+    async pause() {
+      const { useVoiceStore } = await import('./voice')
+      const voice = useVoiceStore()
+      // Playback can outlive the remote generation. Stop every local output, including completed remote turns.
+      for (const turn of [...voice.activeTurns]) {
+        voice.getSpeech(turn)?.cancel('Presentation or connection changed')
+        await voice.finishResponse(turn)
+        settleOwnedTurnSpan({ ...turn, status: 'cancelled' })
+      }
+      for (const [messageId, request] of remoteRequests) {
+        // Speech responses cannot reuse an exhausted identity. The wire message ID stays unchanged.
+        request.context = { ...request.context, turnId: `${messageId}:speech:${nanoid()}` }
+        request.started = false
+      }
+    },
+    async stop() {
+      await import('./voice').then(async ({ useVoiceStore }) => {
+        const voice = useVoiceStore()
+        if (voice.activeTurns.length)
+          await voice.interrupt(voice.activeTurns, 'Conversation mode changed').done
+      })
+      for (const messageId of remoteRequests.keys())
+        await finishRemote(messageId, true)
+      for (const request of requests.values())
+        request.abort.abort(new DOMException('Conversation mode changed', 'AbortError'))
+      runtime.cancelPendingSends()
+    },
+    async event(event) {
+      if (!agentMode.active || !('messageId' in event) || !event.messageId)
+        return
+      const request = remoteRequests.get(event.messageId)
+      // Completed, cancelled, and unknown turn IDs cannot revive speech or a stale transcript.
+      if (!request)
+        return
+      if (event.type === 'response.delta' || event.type === 'response.final') {
+        if (!request.started) {
+          request.started = true
+          await runtime.hooks.emitBeforeMessageComposedHooks(String(request.context.message.content), request.context)
+          await runtime.hooks.emitBeforeSendHooks(String(request.context.message.content), request.context)
+        }
+        const previous = String(request.message.content)
+        const content = event.type === 'response.delta' ? previous + event.text : event.text
+        const literal = content.startsWith(previous) ? content.slice(previous.length) : ''
+        request.message.content = content
+        request.message.slices = [{ type: 'text', text: content }]
+        chatStream.setRemoteMessage(request.context.sessionId, request.message)
+        if (literal)
+          await runtime.hooks.emitTokenLiteralHooks(literal, request.context)
+        if (event.type === 'response.final')
+          await finishRemote(event.messageId)
+      }
+      else if (event.type === 'response.cancelled' || event.type === 'response.error') {
+        await finishRemote(event.messageId, true)
+        if (event.type === 'response.error')
+          appendSendError(request.context.sessionId, new Error(event.message))
+      }
+    },
+  })
+
+  const remoteSubmissions = new Map<string, ReturnType<typeof runtime.submit>>()
+
+  function startRemoteSend(payload: ChatSendPayload, voice: boolean): ReturnType<typeof runtime.submit> {
+    const messageId = payload.messageId ?? nanoid()
+    const existing = remoteSubmissions.get(messageId)
+    if (existing)
+      return existing
+    const transcripts: string[] = []
+    for (const attachment of payload.attachments ?? []) {
+      if (attachment.type !== 'audio' || !attachment.transcript?.trim())
+        throw new Error('OpenClaw Agent Mode accepts audio only after configured speech recognition returns its transcript')
+      transcripts.push(attachment.transcript.trim())
+    }
+    const text = [payload.text, ...transcripts].filter(Boolean).join('\n')
+    if (payload.audioTranscriptPending)
+      throw new Error('Wait for the speech transcript before sending to OpenClaw')
+    if (!agentMode.ready)
+      throw new Error('OpenClaw is disconnected. Agent Mode remains selected.')
+    const user = { id: messageId, role: 'user' as const, content: text, createdAt: Date.now() }
+    const context: ChatStreamEventContext = { sessionId: payload.sessionId, turnId: messageId, message: user, contexts: {}, composedMessage: [], speaks: true }
+    remoteRequests.set(messageId, { context, message: { id: `openclaw:${messageId}`, role: 'assistant', content: '', slices: [], tool_results: [], createdAt: Date.now() }, started: false })
+    updateRemoteTurns([...remoteActiveTurns.value, { sessionId: payload.sessionId, turnId: messageId }])
+    const prepared = chatSession.loadSession(payload.sessionId).then(async (loaded) => {
+      if (!loaded)
+        throw new Error('The AIRI conversation is unavailable')
+      await chatSession.commitUserMessage(payload.sessionId, user)
+      if (!remoteRequests.has(messageId))
+        throw new DOMException('The remote turn was cancelled before sending', 'AbortError')
+      return agentMode.send(text, { messageId, conversationId: payload.sessionId, input: voice ? 'voice' : 'text' })
+    })
+    const accepted = prepared.then(request => request.accepted).then(() => ({ sessionId: payload.sessionId, messageId }))
+    const done = prepared.then(request => request.done).then(async () => {
+      await finishRemote(messageId)
+    }).catch(async (error: unknown) => {
+      await finishRemote(messageId, true)
+      throw error
+    })
+    void accepted.catch(() => {})
+    void done.catch(() => {})
+    const request = { accepted, done }
+    remoteSubmissions.set(messageId, request)
+    void done.finally(() => remoteSubmissions.delete(messageId)).catch(() => {})
+    return request
+  }
+
   function startSend(payload: ChatSendPayload, voice = false, extra: HostSendOptions = {}): ReturnType<typeof runtime.submit> {
+    if (agentMode.active)
+      return startRemoteSend(payload, voice)
     const messageId = payload.messageId ?? nanoid()
     const key = JSON.stringify([payload.sessionId, messageId])
     const existing = requests.get(key)
@@ -1365,6 +1517,11 @@ export const useChatStore = defineStore('chat', () => {
 
   /** Cancels one identified generation through the elected leader. */
   async function cancelTurn(turn: { sessionId: string, turnId: string }) {
+    const remoteId = remoteRequests.has(turn.turnId) ? turn.turnId : [...remoteRequests].find(([, request]) => request.context.turnId === turn.turnId)?.[0]
+    if (remoteId) {
+      await agentMode.cancel(remoteId)
+      await finishRemote(remoteId, true)
+    }
     requests.get(JSON.stringify([turn.sessionId, turn.turnId]))?.abort.abort(new DOMException('Chat turn cancelled', 'AbortError'))
     runtime.cancelTurn(turn)
   }
@@ -1389,6 +1546,8 @@ export const useChatStore = defineStore('chat', () => {
 
   /** Replaces one stored turn with a new execution of its user message. */
   async function retry(payload: ChatRetryPayload): Promise<ChatSendResult> {
+    if (agentMode.active)
+      throw new Error('Send a new message to retry through OpenClaw. Remote history is not rewritten locally.')
     if (!await chatSession.loadSession(payload.sessionId))
       throw new Error('Failed to load the target chat session')
 
@@ -1448,6 +1607,8 @@ export const useChatStore = defineStore('chat', () => {
 
   /** Runs one stored tool call again and replaces its stored result. */
   async function rerunToolCall(payload: ChatToolCallRerunPayload): Promise<void> {
+    if (agentMode.active)
+      throw new Error('Ask the connected OpenClaw agent to run the tool')
     if (requiresToolSelection(payload.toolName) && !payload.tools?.some(tool => tool.name === payload.toolName))
       throw new Error('Select this tool before running it again.')
 
@@ -1502,6 +1663,12 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function cancelPendingSends(sessionId?: string) {
+    for (const [messageId, request] of remoteRequests) {
+      if (!sessionId || request.context.sessionId === sessionId) {
+        await agentMode.cancel(messageId)
+        await finishRemote(messageId, true)
+      }
+    }
     for (const request of requests.values()) {
       if (!sessionId || request.sessionId === sessionId)
         request.abort.abort(new DOMException('Chat turn cancelled', 'AbortError'))

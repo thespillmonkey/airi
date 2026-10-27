@@ -154,3 +154,53 @@ it('removes a submitted message when its late transcript has no speech', async (
   expect(message.snapshot.error).toBe('No speech was recognized in the recording')
   expect(deliver).toHaveBeenCalledWith({ messageId: 'late-silent', sessionId: 'alice', transcript: '' })
 })
+
+it('waits for configured STT before a transcript-only channel submits a recording', async () => {
+  const source = createPushStream<PcmBlock>()
+  const transcript = Promise.withResolvers<string | undefined>()
+  const submit = vi.fn(async (draft: { messageId: string }) => ({ messageId: draft.messageId }))
+  const message = new VoiceMessage('transcript-channel', 'alice', new AudioInput({ live: true, open: () => source.stream }), submit, async () => transcript.promise)
+  source.write({ range: { sourceId: 'mic', startFrame: 0, endFrame: 1600 }, sampleRate: 16000, channels: [new Float32Array(1600).fill(0.25)] })
+  await expect.poll(() => message.snapshot.phase).toBe('capturing')
+  await message.finish()
+  await expect.poll(() => message.snapshot.phase).toBe('ready')
+  const sending = message.send('spoken prefix', { requireTranscript: true })
+  await Promise.resolve()
+  expect(submit).not.toHaveBeenCalled()
+  transcript.resolve('recognized by the configured STT')
+  await sending
+  expect(submit).toHaveBeenCalledWith(expect.objectContaining({ text: 'spoken prefix', transcript: 'recognized by the configured STT' }))
+})
+
+it('retains a recording when a transcript-only channel has no configured STT', async () => {
+  const source = createPushStream<PcmBlock>()
+  const submit = vi.fn(async (draft: { messageId: string }) => ({ messageId: draft.messageId }))
+  const message = new VoiceMessage('no-stt', 'alice', new AudioInput({ live: true, open: () => source.stream }), submit)
+  source.write({ range: { sourceId: 'mic', startFrame: 0, endFrame: 1600 }, sampleRate: 16000, channels: [new Float32Array(1600).fill(0.25)] })
+  await expect.poll(() => message.snapshot.phase).toBe('capturing')
+  await message.finish()
+  await expect.poll(() => message.snapshot.phase).toBe('ready')
+  await expect(message.send('', { requireTranscript: true })).rejects.toThrow('speech recognition')
+  expect(submit).not.toHaveBeenCalled()
+  expect(message.snapshot.phase).toBe('ready')
+  expect(message.snapshot.audio).toBeDefined()
+})
+
+it('keeps the recording recoverable if the selected channel mode changes during STT', async () => {
+  const source = createPushStream<PcmBlock>()
+  const transcript = Promise.withResolvers<string | undefined>()
+  const submit = vi.fn(async (draft: { messageId: string }) => ({ messageId: draft.messageId }))
+  const message = new VoiceMessage('mode-change', 'alice', new AudioInput({ live: true, open: () => source.stream }), submit, async () => transcript.promise)
+  source.write({ range: { sourceId: 'mic', startFrame: 0, endFrame: 1600 }, sampleRate: 16000, channels: [new Float32Array(1600).fill(0.25)] })
+  await expect.poll(() => message.snapshot.phase).toBe('capturing')
+  await message.finish()
+  await expect.poll(() => message.snapshot.phase).toBe('ready')
+  let current = true
+  const sending = message.send('', { requireTranscript: true, isCurrent: () => current })
+  current = false
+  transcript.resolve('recognized by the configured STT')
+  await expect(sending).rejects.toThrow('mode changed')
+  expect(submit).not.toHaveBeenCalled()
+  expect(message.snapshot.phase).toBe('ready')
+  expect(message.snapshot.audio).toBeDefined()
+})

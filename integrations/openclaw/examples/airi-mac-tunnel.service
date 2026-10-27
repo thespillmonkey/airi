@@ -1,0 +1,17 @@
+# Optional Linux-user service. Set the three values in the referenced environment file.
+# The SSH host alias must already have key-only access and verified host keys.
+[Unit]
+Description=AIRI loopback connection to OpenClaw
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/airi-openclaw/tunnel.env
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -R 127.0.0.1:${AIRI_CLIENT_PORT}:127.0.0.1:${OPENCLAW_LOCAL_PORT} ${AIRI_MAC_SSH_HOST}
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

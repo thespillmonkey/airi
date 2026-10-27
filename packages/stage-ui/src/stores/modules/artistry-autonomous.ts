@@ -6,10 +6,11 @@ import { chatMessagesToTurns, streamFrom } from '@proj-airi/core-agent'
 import { artistryGenerateHeadless } from '@proj-airi/stage-shared'
 import { cloneDeep } from 'es-toolkit'
 import { defineStore } from 'pinia'
-import { ref, toRaw } from 'vue'
+import { ref, toRaw, watch } from 'vue'
 import { toast } from 'vue-sonner'
 
 import { useAnalytics } from '../../composables/use-analytics'
+import { useAgentModeStore } from '../agent-mode'
 import { useBackgroundStore } from '../background'
 import { useChatSessionStore } from '../chat/session-store'
 import { useProviderStore } from '../providers/provider'
@@ -19,6 +20,12 @@ import { useArtistryStore } from './artistry'
 const artistLog = import.meta.env.DEV ? console.info.bind(console, '[AutonomousArtist]') : () => {}
 
 export const useAutonomousArtistryStore = defineStore('artistry-autonomous', () => {
+  const agentMode = useAgentModeStore()
+  let activeGeneration: AbortController | undefined
+  watch(() => agentMode.active, (active) => {
+    if (active)
+      activeGeneration?.abort('Agent Mode selected')
+  })
   const cardStore = useAiriCardStore()
   const backgroundStore = useBackgroundStore()
   const artistryStore = useArtistryStore()
@@ -48,6 +55,8 @@ export const useAutonomousArtistryStore = defineStore('artistry-autonomous', () 
    * Analyzes the context in parallel and triggers a visual if threshold is met.
    */
   async function runArtistTask(inputText: string, history: Message[] = [], targetOverride?: 'user' | 'assistant', targetSessionId = chatSessionStore.activeSessionId) {
+    if (agentMode.active)
+      return
     if (isProcessing.value) {
       artistLog('Skipping task: Already processing another task.')
       return
@@ -71,6 +80,8 @@ export const useAutonomousArtistryStore = defineStore('artistry-autonomous', () 
 
     const threshold = artistry.autonomousThreshold ?? 70
 
+    const generation = new AbortController()
+    activeGeneration = generation
     isProcessing.value = true
     artistLog('Starting analysis task...', { threshold, cardId, target })
 
@@ -172,6 +183,7 @@ LATEST ${target === 'assistant' ? 'COMPANION RESPONSE' : 'USER INPUT'}:
         await new Promise(resolve => setTimeout(resolve, 10000))
       }
 
+      generation.signal.throwIfAborted()
       // 2. Call LLM (Non-streaming for structured data)
       // Bypasses the chat orchestrator's llm_request_* funnel — emit a
       // dedicated event so Director LLM cost is separable from chat.
@@ -184,7 +196,7 @@ LATEST ${target === 'assistant' ? 'COMPANION RESPONSE' : 'USER INPUT'}:
         model: modelId,
         chatProvider,
         conversation: { turns: chatMessagesToTurns(messages) },
-        options: { onStreamEvent: (event) => {
+        options: { abortSignal: generation.signal, onStreamEvent: (event) => {
           if (event.type === 'text-delta')
             responseText += event.text
         } },
@@ -244,7 +256,9 @@ LATEST ${target === 'assistant' ? 'COMPANION RESPONSE' : 'USER INPUT'}:
 
         // Safety: ensure payload is a plain object for IPC serialization
         const plainPayload = JSON.parse(JSON.stringify(toRaw(generationPayload)))
+        generation.signal.throwIfAborted()
         const result = await invokers.generate(plainPayload)
+        generation.signal.throwIfAborted()
 
         if (result.error) {
           throw new Error(result.error)
@@ -264,7 +278,9 @@ LATEST ${target === 'assistant' ? 'COMPANION RESPONSE' : 'USER INPUT'}:
             blob = await response.blob()
           }
 
+          generation.signal.throwIfAborted()
           const entryId = await backgroundStore.addBackground('journal', blob, analysis.title || 'Autonomous Scene', analysis.prompt, cardId)
+          generation.signal.throwIfAborted()
           artistLog('Generation complete and added to journal.', { entryId })
 
           // 5. Route based on spawnMode
@@ -376,6 +392,7 @@ LATEST ${target === 'assistant' ? 'COMPANION RESPONSE' : 'USER INPUT'}:
     }
     finally {
       isProcessing.value = false
+      activeGeneration = undefined
     }
   }
 

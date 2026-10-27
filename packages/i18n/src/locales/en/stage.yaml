@@ -383,3 +383,25 @@ notifications:
       title: Renewal payment failed
       body: We will retry on {retryAt}. Update your payment method to keep {plan}.
       body-no-retry: Update your payment method to keep {plan}.
+
+agent-mode:
+  title: OpenClaw connection
+  agent: Agent Mode
+  normal: Normal Mode
+  description: Agent Mode uses your OpenClaw agent. Normal Mode keeps AIRI behavior.
+  return-normal: Return to Normal Mode
+  enable: Enable Agent Mode
+  endpoint: Bridge WebSocket endpoint
+  agent-id: OpenClaw agent ID
+  token: Connection token
+  connect: Connect this conversation
+  disconnect: Disconnect
+  disconnected-note: A disconnected bridge never starts AIRI conversation generation.
+  allow-once: Allow once
+  deny: Deny
+  voice-catalog: Configured voice catalog
+  voice-catalog-description: Enter a JSON array with providerId, modelId, and voiceId for voices you configured. Do not enter credentials.
+  save-catalog: Save voice catalog
+  approval-resolved: Approval resolved.
+  approval-expired: Approval expired.
+  approval-cancelled: Approval cancelled.
