@@ -43,7 +43,7 @@ const notices = [
   dependencyLicense('@valibot/to-json-schema', join(root, 'package.json')),
 ]
 const attribution = '# Third-party notices\n\nThis plugin derives from Project AIRI and preserves its MIT license in `LICENSE`.\nThe standalone JavaScript bundle includes the libraries below.\nThe external `ws` dependency retains its own package license.\n\n'
-writeFileSync(join(destination, 'THIRD-PARTY-NOTICES.md'), attribution + notices.map(notice => notice.text).join('\n'))
+writeFileSync(join(destination, 'THIRD-PARTY-NOTICES.md'), `${(attribution + notices.map(notice => notice.text).join('\n')).trimEnd()}\n`)
 const source = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const runtime = {
   name: source.name,

@@ -6,8 +6,10 @@ import type { Conversation, Registry } from './registry'
 
 import { randomUUID } from 'node:crypto'
 
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from 'openclaw/plugin-sdk/approval-handler-runtime'
 import { getExecApprovalReplyMetadata } from 'openclaw/plugin-sdk/approval-reply-runtime'
 import { runPassiveAccountLifecycle } from 'openclaw/plugin-sdk/channel-outbound'
+import { registerChannelRuntimeContext } from 'openclaw/plugin-sdk/channel-runtime-context'
 
 import * as v from 'valibot'
 
@@ -59,6 +61,16 @@ export function createChannel(api: OpenClawPluginApi, config: Config, registry: 
         start: async () => {
           if (running)
             throw new Error('The AIRI account is already running')
+          const approvalContext = registerChannelRuntimeContext({
+            channelRuntime: ctx.channelRuntime,
+            channelId: 'airi',
+            accountId: ctx.accountId,
+            capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+            context: {},
+            abortSignal: ctx.abortSignal,
+          })
+          if (!approvalContext)
+            throw new Error('The host does not expose the AIRI native approval runtime context registry')
           running = true
           const update = () => ctx.setStatus({
             ...ctx.getStatus(),
@@ -72,7 +84,10 @@ export function createChannel(api: OpenClawPluginApi, config: Config, registry: 
           })
           const unsubscribe = registry.subscribeConnections(update)
           update()
-          return unsubscribe
+          return () => {
+            unsubscribe()
+            approvalContext.dispose()
+          }
         },
         stop: (unsubscribe) => {
           running = false

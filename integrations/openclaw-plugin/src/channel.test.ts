@@ -131,17 +131,21 @@ describe('native OpenClaw channel adapter', () => {
     type Context = Parameters<typeof start>[0]
     let snapshot: ReturnType<Context['getStatus']> = { accountId: 'default' }
     const controller = new AbortController()
+    const disposeContext = vi.fn()
+    const registerContext = vi.fn<NonNullable<Context['channelRuntime']>['runtimeContexts']['register']>(() => ({ dispose: disposeContext }))
     const lifecycle = start({
       cfg: {},
       accountId: 'default',
       account: { accountId: 'default', enabled: true },
       runtime: { log: vi.fn(), error: vi.fn(), exit: () => { throw new Error('Unexpected exit') } },
       abortSignal: controller.signal,
+      channelRuntime: { runtimeContexts: { register: registerContext, get: () => undefined, watch: () => () => {} } },
       getStatus: () => snapshot,
       setStatus: (next) => {
         snapshot = next
       },
     })
+    expect(registerContext).toHaveBeenCalledWith(expect.objectContaining({ channelId: 'airi', accountId: 'default', capability: 'approval.native', context: {} }))
     expect(fixture.native.isRunning()).toBe(true)
     expect(snapshot.lifecycle).toBe('ready')
     expect(snapshot.connected).toBeUndefined()
@@ -149,6 +153,7 @@ describe('native OpenClaw channel adapter', () => {
     expect(snapshot.stateReason).toBe('0 authenticated AIRI clients')
     controller.abort()
     await lifecycle
+    expect(disposeContext).toHaveBeenCalled()
     expect(fixture.native.isRunning()).toBe(false)
     expect(snapshot.lifecycle).toBe('stopped')
     fixture.registry.dispose()

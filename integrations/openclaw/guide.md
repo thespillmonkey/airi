@@ -78,23 +78,77 @@ Enable the optional `airi_presentation` tool through the host's normal allowlist
 It is scoped to the authenticated AIRI sender and current conversation. It cannot
 address another client through model-supplied routing arguments.
 
-Discover before changing:
+Discover before changing. Each object below represents a separate tool call:
 
 ```json
-{ "command": { "operation": "state.read" } }
-{ "command": { "operation": "avatars.list" } }
-{ "command": { "operation": "voices.list" } }
-{ "command": { "operation": "profiles.list" } }
+[
+  {
+    "command": {
+      "operation": "state.read"
+    }
+  },
+  {
+    "command": {
+      "operation": "avatars.list"
+    }
+  },
+  {
+    "command": {
+      "operation": "voices.list"
+    }
+  },
+  {
+    "command": {
+      "operation": "profiles.list"
+    }
+  }
+]
 ```
 
 Use the returned stable IDs and advertised capabilities:
 
 ```json
-{ "command": { "operation": "avatar.select", "avatarId": "returned-avatar-id", "scope": "client" } }
-{ "command": { "operation": "voice.select", "voice": { "providerId": "returned-provider", "modelId": "returned-model", "voiceId": "returned-voice" }, "scope": "client" } }
-{ "command": { "operation": "settings.update", "settings": { "speechVolume": 0.6 }, "scope": "client" } }
-{ "command": { "operation": "profile.save", "name": "Work", "scope": "client" } }
-{ "command": { "operation": "presentation.restore" } }
+[
+  {
+    "command": {
+      "operation": "avatar.select",
+      "avatarId": "returned-avatar-id",
+      "scope": "client"
+    }
+  },
+  {
+    "command": {
+      "operation": "voice.select",
+      "voice": {
+        "providerId": "returned-provider",
+        "modelId": "returned-model",
+        "voiceId": "returned-voice"
+      },
+      "scope": "client"
+    }
+  },
+  {
+    "command": {
+      "operation": "settings.update",
+      "settings": {
+        "speechVolume": 0.6
+      },
+      "scope": "client"
+    }
+  },
+  {
+    "command": {
+      "operation": "profile.save",
+      "name": "Work",
+      "scope": "client"
+    }
+  },
+  {
+    "command": {
+      "operation": "presentation.restore"
+    }
+  }
+]
 ```
 
 `profile.save` with an existing `profileId` updates that profile. `profile.apply`

@@ -61,8 +61,11 @@ Every body contains `version: 1` and a discriminating `type`.
   and sequence. Status is presentation metadata, not spoken content.
 - `presentation.request`: actionId and a validated presentation command.
 - `approval.request`: approvalId, kind, description, optional expiresAt, and
-  allowedDecisions. Native approval lifecycle support must be verified separately;
-  a request frame alone is not evidence that a tool was authorized.
+  allowedDecisions. A request frame alone is not evidence that a tool was authorized.
+- `approval.resolved`: approvalId, status (`resolved`, `expired`, or `cancelled`),
+  optional decision and applicationStatus (`applied` or `not-applied`), and sequence.
+  The client keeps a submitted decision pending until this native acknowledgement.
+  Expiry and external resolution remove the stale prompt as well.
 
 ## Ordering and recovery
 
