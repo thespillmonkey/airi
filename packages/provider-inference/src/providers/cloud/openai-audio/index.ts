@@ -200,7 +200,12 @@ export const providerOpenAICompatibleAudioSpeech = defineProvider<OpenAICompatib
   descriptionLocalize: ({ t }) => t('settings.pages.providers.provider.openai-compatible.description'),
   tasks: ['text-to-speech'],
   icon: 'i-lobe-icons:openai',
-  createProviderConfig: ({ t }) => createAudioConfigSchema(openAICompatibleAudioConfigSchema, t),
+  createProviderConfig: ({ t }) => createAudioConfigSchema(openAICompatibleAudioConfigSchema, t).extend({
+    streamingWav: z.boolean().default(false).meta({
+      labelLocalized: t('settings.pages.providers.catalog.edit.config.common.fields.field.streaming-wav.label'),
+      descriptionLocalized: t('settings.pages.providers.catalog.edit.config.common.fields.field.streaming-wav.description'),
+    }),
+  }),
   createProvider: createAudioProvider,
   validationRequiredWhen: config => Boolean(config.apiKey?.trim() && config.baseUrl?.trim()),
   validators: createAudioValidators<OpenAICompatibleAudioConfig>(),

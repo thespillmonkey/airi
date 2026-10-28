@@ -1,5 +1,5 @@
 import type { SpeechOutput } from '@proj-airi/core-agent'
-import type { TtsRequest } from '@proj-airi/pipelines-audio'
+import type { PcmBlock, TtsRequest } from '@proj-airi/pipelines-audio'
 
 import type { ReadableSpan } from './use-io-tracer'
 
@@ -28,6 +28,33 @@ function turnSpan() {
 function spanNamed(name: string) {
   return spans.find(span => span.name === name)
 }
+
+it('measures streaming PCM without decoding or waiting for audio EOF', async () => {
+  let body!: ReadableStreamDefaultController<PcmBlock>
+  const pcm = new ReadableStream<PcmBlock>({ start(controller) {
+    body = controller
+  } })
+  const decode = vi.fn(async () => ({ duration: 0 }))
+  const trace = traceSpeechOutput({ sessionId: 'alice', turnId: 'reply' }, turnSpan(), {
+    playback: new Playback({ nowMs: () => 0, play: vi.fn() }),
+    synthesize: async () => pcm,
+  }, decode)
+  if (!('synthesize' in trace.output))
+    throw new Error('Expected pipeline synthesis')
+  const audio = await trace.output.synthesize(request('Streamed.'), new AbortController().signal)
+  if (!audio || audio instanceof Blob)
+    throw new Error('Expected PCM stream')
+  const reader = audio.getReader()
+  const block: PcmBlock = { range: { sourceId: 'http', startFrame: 0, endFrame: 240 }, sampleRate: 24000, channels: [new Float32Array(240)] }
+  body.enqueue(block)
+  expect((await reader.read()).value).toBe(block)
+  expect(decode).not.toHaveBeenCalled()
+  expect(spanNamed(IOSpanNames.TTSSynthesis)).toBeUndefined()
+  body.close()
+  expect((await reader.read()).done).toBe(true)
+  trace.end()
+  expect(spanNamed(IOSpanNames.TTSSynthesis)?.attributes[IOAttributes.TTSAudioDurationMs]).toBe(10)
+})
 
 it('records synthesis, playback, and turn spans with the fields that timelines join', async () => {
   const started = vi.fn()

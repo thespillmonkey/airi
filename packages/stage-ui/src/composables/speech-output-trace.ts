@@ -88,6 +88,21 @@ export function traceSpeechOutput(turn: TurnRef, parent: Span, output: SpeechOut
         return audio
       }
 
+      if (!(audio instanceof Blob)) {
+        let durationMs = 0
+        // Observe consumption in place. Tracing must not drain or buffer streamed speech ahead of playback.
+        return audio.pipeThrough(new TransformStream({
+          transform(block, controller) {
+            durationMs += (block.range.endFrame - block.range.startFrame) / block.sampleRate * 1000
+            controller.enqueue(block)
+          },
+          flush() {
+            span.setAttribute(IOAttributes.TTSAudioDurationMs, durationMs)
+            finish(span)
+          },
+        }), { signal })
+      }
+
       // Playback must not wait for tracing. The span keeps its synthesis end time while the duration decodes.
       // It leaves the open set now, so a turn that ends during decoding does not mark finished synthesis as canceled.
       open.delete(span)

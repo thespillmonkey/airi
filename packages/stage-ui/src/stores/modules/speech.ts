@@ -20,6 +20,7 @@ import { injectKeyPiniaSynced } from '../../libs/pinia/synced-context'
 import { getDefinedProvider } from '../../libs/providers/providers'
 import { OFFICIAL_SPEECH_PROVIDER_ID, OFFICIAL_SPEECH_STREAMING_PROVIDER_ID, pickOfficialSpeechVoice, picksSpeechVoiceAutomatically } from '../../libs/providers/providers/official'
 import { streamSpeech } from '../../libs/speech/streaming-pipeline'
+import { decodeWavStream } from '../../libs/speech/wav-stream'
 import { useProviderConfigStore } from '../providers/config'
 import { useProviderStore } from '../providers/provider'
 
@@ -646,6 +647,18 @@ export const useSpeechStore = defineStore('speech', () => {
       const settings = providerId === OFFICIAL_SPEECH_PROVIDER_ID
         ? { ...config, extraBody: { ...(config.extraBody as Record<string, unknown> | undefined), airi_analytics: { trigger: 'auto', source: 'chat_auto_tts', voice_type: voiceType, turn_id: turn.turnId } } }
         : config
+      if (providerId === 'openai-compatible-audio-speech' && config.streamingWav === true) {
+        const baseUrl = String(config.baseUrl ?? '').replace(/\/?$/, '/')
+        const response = await fetch(new URL('audio/speech', baseUrl), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${String(config.apiKey ?? '')}` },
+          body: JSON.stringify({ model, input, voice: voiceId, stream: true, response_format: 'wav' }),
+          signal,
+        })
+        if (!response.ok || !response.body)
+          throw new Error(`Streaming speech request failed (${response.status})`)
+        return decodeWavStream(response.body)
+      }
       const audio = await generateSpeech({ ...client.speech(model, settings), input, voice: voiceId, abortSignal: signal })
       return new Blob([audio])
     } }

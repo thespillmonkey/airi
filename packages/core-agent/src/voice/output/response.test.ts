@@ -1,4 +1,4 @@
-import type { TtsRequest } from '@proj-airi/pipelines-audio'
+import type { PcmBlock, TtsRequest } from '@proj-airi/pipelines-audio'
 
 import type { SpeechAudio, StreamingTranscriber, TranscriptionEvent } from '../../index'
 
@@ -10,6 +10,35 @@ import { VoiceController } from '../../index'
 import { keepOpen, pcmSource } from '../../testing/audio'
 
 describe('voiceController output', () => {
+  it('plays synthesized PCM before audio EOF and cancels it with the turn', async () => {
+    let body!: ReadableStreamDefaultController<PcmBlock>
+    const cancelled = vi.fn()
+    const firstAudio = Promise.withResolvers<PcmBlock>()
+    const pcm = new ReadableStream<PcmBlock>({ start(controller) { body = controller }, cancel: cancelled })
+    const playback = new Playback({ nowMs: () => 0, play: (clip) => {
+      if (clip.audio instanceof Blob)
+        throw new Error('Expected streaming PCM')
+      const reader = clip.audio.getReader()
+      const done = reader.read().then(async (first) => {
+        firstAudio.resolve(first.value!)
+        while (!(await reader.read()).done) {}
+        return { throughMs: 1 }
+      })
+      return { done, stop: async () => { await reader.cancel('Turn stopped'); return { throughMs: 0 } } }
+    } })
+    const controller = new VoiceController({ speech: () => ({ playback, synthesize: async () => pcm }) })
+    const response = controller.openResponse({ sessionId: 'alice', turnId: 'pcm-stream' })
+    const speech = response.openSpeech({ purpose: 'answer' })
+    speech.write('Streaming playback.')
+    speech.end()
+    const sample: PcmBlock = { range: { sourceId: 'http', startFrame: 0, endFrame: 2 }, sampleRate: 24000, channels: [Float32Array.of(0.1, 0.2)] }
+    body.enqueue(sample)
+    expect(await firstAudio.promise).toEqual(sample)
+    speech.cancel('User stopped')
+    await expect.poll(() => cancelled.mock.calls.length).toBe(1)
+    await controller.close()
+  })
+
   it('ends the speaking indicator only after cancelled audio becomes silent', async () => {
     const silence = Promise.withResolvers<{ throughMs: number }>()
     const started = vi.fn()

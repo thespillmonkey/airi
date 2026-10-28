@@ -380,3 +380,14 @@ The default pack contains twelve generated chibi reactions of AIRI's official bl
 See [artwork provenance](src/assets/stickers/README.md) for references, exact prompts, and inspection notes.
 These are static assets. No runtime image-generation dependency is included.
 The four development-only Fluent Emoji images are removed. No old-ID migration is included.
+
+## Streamed compatible speech
+
+The OpenAI-compatible speech provider has an opt-in **Stream WAV audio** setting. Enable it only when the server supports streamed PCM16 WAV responses.
+
+The client sends `stream: true` and `response_format: wav`. Audio playback starts from incoming PCM frames instead of a complete recording.
+The decoder reads the channel count and sample rate from the WAV header. Stop aborts the HTTP request and its playback.
+Speech tracing observes playback consumption without buffering the response.
+
+The setting defaults to off. Other providers keep their existing transport.
+This transport streams audio output per text segment. It is not a bidirectional text-input WebSocket protocol.

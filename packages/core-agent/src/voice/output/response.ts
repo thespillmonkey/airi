@@ -46,7 +46,7 @@ export type SpeechOutput = {
   /** BCP 47 code of the voice. The words around a formula or a price select its language first. */
   readonly language?: string
 } & ({
-  readonly synthesize: SpeechPipelineOptions<Blob>['tts']
+  readonly synthesize: SpeechPipelineOptions<Blob | ReadableStream<PcmBlock>>['tts']
 } | {
   /** The provider consumes text and emits audio parts concurrently. Its adapter owns decoding and source coordinates. */
   readonly stream: (text: ReadableStream<string>, signal: AbortSignal) => Promise<ReadableStream<SpeechAudio>>
@@ -115,13 +115,13 @@ export class SpeechStream {
     }
 
     const listeners = {
-      start: new Set<SpeechPipelineEvents<Blob>['onPlaybackStart']>(),
-      end: new Set<SpeechPipelineEvents<Blob>['onPlaybackEnd']>(),
-      interrupt: new Set<SpeechPipelineEvents<Blob>['onPlaybackInterrupt']>(),
+      start: new Set<SpeechPipelineEvents<Blob | ReadableStream<PcmBlock>>['onPlaybackStart']>(),
+      end: new Set<SpeechPipelineEvents<Blob | ReadableStream<PcmBlock>>['onPlaybackEnd']>(),
+      interrupt: new Set<SpeechPipelineEvents<Blob | ReadableStream<PcmBlock>>['onPlaybackInterrupt']>(),
     }
-    const pending = new Set<PlaybackItem<Blob>>()
+    const pending = new Set<PlaybackItem<Blob | ReadableStream<PcmBlock>>>()
 
-    const pipeline = createSpeechPipeline<Blob>({
+    const pipeline = createSpeechPipeline<Blob | ReadableStream<PcmBlock>>({
       tts: async (request, signal) => {
         try {
           const audio = await output.synthesize(request, AbortSignal.any([signal, this.signal, response.signal]))

@@ -1678,6 +1678,9 @@ pages:
           common:
             fields:
               field:
+                streaming-wav:
+                  label: Stream WAV audio
+                  description: Play audio as it arrives. Requires a server that streams PCM16 WAV responses.
                 web-search:
                   label: Web search
                   description: Allow supported OpenAI models to search when needed. Uses your API key and can incur search charges. Requires Responses API.
