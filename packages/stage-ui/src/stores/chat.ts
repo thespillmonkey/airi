@@ -1434,14 +1434,22 @@ export const useChatStore = defineStore('chat', () => {
     const context: ChatStreamEventContext = { sessionId: payload.sessionId, turnId: messageId, message: user, contexts: {}, composedMessage: [], speaks: true }
     remoteRequests.set(messageId, { context, message: { id: `openclaw:${messageId}`, role: 'assistant', content: '', slices: [], tool_results: [], createdAt: Date.now() }, started: false })
     updateRemoteTurns([...remoteActiveTurns.value, { sessionId: payload.sessionId, turnId: messageId }])
-    const prepared = chatSession.loadSession(payload.sessionId).then(async (loaded) => {
+    const prepared = (async () => {
+      const request = remoteRequests.get(messageId)
+      if (!request)
+        throw new DOMException('The remote turn was cancelled before sending', 'AbortError')
+      // Stop resolves generation identities through the speech host, including the thinking phase before any text arrives.
+      request.started = true
+      await runtime.hooks.emitBeforeMessageComposedHooks(text, context)
+      await runtime.hooks.emitBeforeSendHooks(text, context)
+      const loaded = await chatSession.loadSession(payload.sessionId)
       if (!loaded)
         throw new Error('The AIRI conversation is unavailable')
       await chatSession.commitUserMessage(payload.sessionId, user)
       if (!remoteRequests.has(messageId))
         throw new DOMException('The remote turn was cancelled before sending', 'AbortError')
       return agentMode.send(text, { messageId, conversationId: payload.sessionId, input: voice ? 'voice' : 'text' })
-    })
+    })()
     const accepted = prepared.then(request => request.accepted).then(() => ({ sessionId: payload.sessionId, messageId }))
     const done = prepared.then(request => request.done).then(async () => {
       await finishRemote(messageId)

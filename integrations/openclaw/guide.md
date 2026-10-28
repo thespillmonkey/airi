@@ -188,6 +188,7 @@ A timeout means the state is uncertain; read `state.read` before another change.
 
 Use the existing stop control to cancel the owned turn and speech. Disconnect keeps
 Agent Mode selected, so it never starts AIRI's independent reasoning as a fallback.
+Stop also cancels a thinking turn before its first text arrives.
 Reconnect uses the same binding and event sequence, with bounded replay and duplicate
 protection. Stale actions from a previous mode epoch cannot change the new mode.
 
