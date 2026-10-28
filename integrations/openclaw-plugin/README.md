@@ -152,7 +152,10 @@ Those terminal events are sequenced and replay after reconnect.
 Core enforces the reviewer policy and pending-request lifetime.
 The plugin never auto-approves tools or grants its own Gateway scopes.
 
-Live exec, plugin, and system-agent approval compatibility remains an acceptance test.
+Live verification on the isolated Linux Gateway 2026.10.3 covered actual agent exec approval: deny, allow-once, core acknowledgement, and rejection of another client/conversation.
+The allowed exec returned an exact printf marker; the denied exec returned an error.
+The test model then looped in its own yield tool after the allowed result, so a bounded test cancelled that turn; a clean natural-language final after allow was not verified in that run.
+Plugin and system-agent approval kinds have SDK adapter tests but remain unverified live.
 Do not treat a mocked approval result as live verification.
 
 ## Limits and diagnostics
@@ -184,7 +187,7 @@ Revoke the credential from both endpoints.
 
 An existing Gateway process cannot receive a new environment variable from its parent shell.
 For hot installation, use OpenClaw's supported SecretRef materialization instead of `tokenEnv`.
-Each client accepts exactly one credential source: `token` or `tokenEnv`.
+Each client accepts exactly one credential source: `token`, `tokenEnv`, or `tokenFile`.
 The manifest declares `clients.*.token` as a secret input.
 The Gateway resolves and redacts this input before the plugin loads.
 The runtime rejects an unresolved reference.
@@ -234,7 +237,30 @@ openclaw secrets reload
 openclaw plugins reload airi --wait --accept-capabilities
 ```
 
-These operations do not require a Gateway restart.
-The new plugin generation receives the resolved credential.
+The public operations support plugin-only reload. Fresh private Gateway startup with this SecretRef was live verified.
+Hot first activation on an already-running Gateway remained blocked by host materialization of a previously disabled plugin.
+Do not treat a successful secrets reload alone as authenticated bridge readiness.
+Use the protected `tokenFile` option below when this host limitation applies.
 Rotate a managed credential through the same refresh and reload sequence.
-Do not configure both `token` and `tokenEnv` for one client.
+Do not configure multiple credential sources for one client.
+
+
+## Protected file credential for hot activation
+
+`tokenFile` is a plugin-owned protected credential reference.
+It does not depend on host SecretRef activation or a new process environment variable.
+For example, replace the credential field in one client with:
+
+```json
+{ "principalId": "gary", "agentIds": ["mitsuki"], "tokenFile": "/absolute/private/path/airi-client-token" }
+```
+
+The file contains only the credential. One terminal LF or CRLF is removed, matching single-value secret files; other bytes are unchanged.
+It must be a regular file owned by the Gateway process user, mode `0600`, exactly one hard link, and 32 to 4096 UTF-8 bytes.
+The plugin opens it with `O_NOFOLLOW` and rejects a final symlink, a relative path, unsafe permissions, an unsupported platform, and non-regular files.
+Reads are bounded; errors never include the path or contents.
+This option targets the tested Linux and macOS hosts, not Windows.
+The plugin snapshots the credential at load and detects duplicate credentials across principals.
+Rotate the file through a private write and reload only the AIRI plugin.
+It never copies credentials into presentation profiles or client bundles.
+Keep the previous file and source configuration available until an authenticated connection passes.

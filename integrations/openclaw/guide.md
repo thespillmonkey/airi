@@ -195,6 +195,13 @@ Select Return to Normal Mode to cancel owned work, drain speech, restore the cap
 presentation, and resume AIRI's normal behavior. Saved presentation profiles remain
 available, but selecting Normal Mode does not apply one implicitly.
 
+Automatic VAD input in Agent Mode is half duplex: it is suppressed while owned
+response output is active or draining, followed by a 400 ms echo hangover. A
+recording admitted before output began cannot later auto-submit speech that overlapped
+that output. An asynchronous detector cannot bypass a mode or conversation change.
+Explicit push-to-talk and stop controls retain their intentional interruption path.
+Normal Mode keeps AIRI's existing echo-cancellation and automatic barge-in behavior.
+
 ## Diagnostics
 
 - HTTP 403 before connection: check exact `allowedOrigins` and the client URL.

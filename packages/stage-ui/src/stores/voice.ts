@@ -17,6 +17,7 @@ import { useVoiceDrafts } from '../composables/voice-drafts'
 import { useVoiceEndJudge } from '../composables/voice-end-judge'
 import { createVoiceInputTracer } from '../composables/voice-input-trace'
 import { useVoiceRephrase } from '../composables/voice-rephrase'
+import { createAgentSpeechGate } from '../libs/voice/agent-speech-gate'
 import { observeInputLevel } from '../libs/voice/input-level'
 import { createSpeakerEvidencePlugin } from '../libs/voice/speaker-evidence-plugin'
 import { createVoiceActivityPlugin } from '../libs/voice/voice-activity-plugin'
@@ -68,6 +69,9 @@ export const useVoiceStore = defineStore('voice', () => {
   let requestTools: (() => readonly ChatToolReference[]) | undefined
   const { drafts, frontDraftId, acceptSpeech, sendDraft, discardDraft, editDraft, selectDraft } = useVoiceDrafts(report, () => requestTools?.())
   const activeTurns = shallowRef<readonly TurnRef[]>([])
+  const echoGate = createAgentSpeechGate({ active: () => agentMode.active, captureContext: () => agentMode.captureInputContext() })
+  const automaticInputs = new Map<string, { accepts: () => boolean, cancel: () => void }>()
+  watch(() => speaking.nowSpeaking, value => echoGate.setSpeaking(value), { immediate: true, flush: 'sync' })
   const responses = new Map<string, { response: VoiceResponse, speech?: SpeechStream }>()
   const audioContext = useAudioContext()
   /** One trace per open response turn. It ends after the response drains, is cancelled, or fails to open. */
@@ -96,6 +100,13 @@ export const useVoiceStore = defineStore('voice', () => {
       return trace.output
     },
     submit: async (submission, signal) => {
+      const automatic = automaticInputs.get(submission.submissionId)
+      if (automatic && !automatic.accepts()) {
+        automatic.cancel()
+        signal.throwIfAborted()
+        throw new DOMException('Automatic input overlapped agent speech or a mode transition', 'AbortError')
+      }
+
       if (!composerInputs.has(submission.submissionId))
         return acceptSpeech(submission, signal)
 
@@ -131,6 +142,12 @@ export const useVoiceStore = defineStore('voice', () => {
   }
 
   controller.onInput((attempt) => {
+    if (attempt.cause !== 'control') {
+      const accepts = echoGate.captureAutomatic()
+      const isCurrent = agentMode.captureInputContext()
+      automaticInputs.set(attempt.id, { accepts: () => accepts() && isCurrent(), cancel: () => attempt.cancel('Automatic input overlapped agent speech or a mode transition') })
+      void attempt.done.finally(() => automaticInputs.delete(attempt.id))
+    }
     presentedInput = { requestId: attempt.id, attempt }
     // A control begins with `control`, and the voice activity rule begins with `speech` or `wake-word`.
     // An input that another caller began without a cause is traced as speech.
@@ -210,11 +227,15 @@ export const useVoiceStore = defineStore('voice', () => {
 
     const entry: { response: VoiceResponse, speech?: SpeechStream } = { response }
     responses.set(key, entry)
+    echoGate.outputStarted(key)
     response.signal.addEventListener('abort', () => {
       streamingControl.cancelTurn(turn.turnId)
       void chat.cancelTurn(turn).catch(report)
       // A cancelled response still fades its playback. finish() shares that drain, so playback spans end first.
-      void response.finish().catch(report).finally(() => endSpeechTrace(key))
+      void response.finish().catch(report).finally(() => {
+        echoGate.outputFinished(key)
+        endSpeechTrace(key)
+      })
       updateActiveTurns()
     }, { once: true })
 
@@ -242,7 +263,7 @@ export const useVoiceStore = defineStore('voice', () => {
     if (!entry)
       return
 
-    const result = await entry.response.finish()
+    const result = await entry.response.finish().finally(() => echoGate.outputFinished(key))
     streamingControl.completeTurn(turn.turnId)
     responses.delete(key)
     endSpeechTrace(key)
@@ -507,8 +528,10 @@ export const useVoiceStore = defineStore('voice', () => {
       // A capture lease, for example a voiceprint enrollment, records speech that can contain a wake word. It must not start an input.
       enabled: () => !voiceMessages.isRecording && !captureLease.held,
       silenceMs: () => hearing.endJudgeEnabled ? VOICE_END_SILENCE.pauseMs + VOICE_END_SILENCE.graceMs : VOICE_END_SILENCE.pauseMs,
-      // Automatic barge-in requires platform echo cancellation or an external echo classifier.
-      acceptSpeech: options.acceptSpeech ?? (async () => !speaking.nowSpeaking || devices.source.echoCancellation),
+      // Agent Mode gates queued and draining output. Normal Mode keeps AEC or classifier-based barge-in.
+      acceptSpeech: (window, signal) => echoGate.acceptAutomatic(() => options.acceptSpeech
+        ? options.acceptSpeech(window, signal)
+        : !speaking.nowSpeaking || devices.source.echoCancellation),
       // Wake word mode returns no target, so VAD alone cannot start an input. A wake supplies its own target.
       target: () => sessions.activeSessionId && hearing.configured && startsInputOnSpeech(hearing.inputMode)
         ? { sessionId: sessions.activeSessionId, interruptTurns: activeTurns.value.filter(turn => turn.sessionId === sessions.activeSessionId) }

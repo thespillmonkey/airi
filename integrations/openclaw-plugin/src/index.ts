@@ -36,6 +36,7 @@ export function register(api: OpenClawPluginApi) {
   const native = createChannel(api, config, registry)
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 1048576, perMessageDeflate: false })
   let stopped = false
+  const approvalRuns = new Set<AbortController>()
 
   const toolArgsSchema = v.strictObject({ command: presentationCommandSchema })
   api.registerChannel({ plugin: native.channel })
@@ -160,15 +161,24 @@ export function register(api: OpenClawPluginApi) {
             registry.acceptResult(conversation, message)
             break
           case 'approval.resolve': {
+            if (approvalRuns.size >= 32)
+              throw new Error('Too many active approval commands')
             const command = registry.resolveApproval(conversation, message.approvalId, message.decision)
+            const approvalConversation = conversation
+            const controller = new AbortController()
+            approvalRuns.add(controller)
             // Core receives the same authenticated sender and enforces its normal reviewer policy.
-            await native.dispatch(conversation, {
+            // Approval dispatch can await the resumed agent. Keep cancellation and acknowledgements responsive.
+            void native.dispatch(approvalConversation, {
               version: 1,
               type: 'user.message',
               messageId: randomUUID(),
               input: 'text',
               text: command,
-            }, new AbortController())
+            }, controller).catch(() => {
+              if (!stopped)
+                registry.emit(approvalConversation, { version: 1, type: 'response.error', code: 'approval_dispatch_failed', message: 'The native approval command failed. Check its current status before retrying.' })
+            }).finally(() => { approvalRuns.delete(controller) })
             break
           }
         }
@@ -215,6 +225,9 @@ export function register(api: OpenClawPluginApi) {
   })
   api.lifecycle.onDispose(() => {
     stopped = true
+    for (const controller of approvalRuns)
+      controller.abort()
+    approvalRuns.clear()
     registry.dispose()
     for (const socket of sockets.clients)
       socket.terminate()

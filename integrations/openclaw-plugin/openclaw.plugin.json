@@ -77,28 +77,29 @@
                   }
                 }
               ]
+            },
+            "tokenFile": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "description": "Absolute path to an owned private0600credential file; one hard link, no final symlink."
             }
           },
           "oneOf": [
             {
               "required": [
                 "tokenEnv"
-              ],
-              "not": {
-                "required": [
-                  "token"
-                ]
-              }
+              ]
             },
             {
               "required": [
                 "token"
-              ],
-              "not": {
-                "required": [
-                  "tokenEnv"
-                ]
-              }
+              ]
+            },
+            {
+              "required": [
+                "tokenFile"
+              ]
             }
           ]
         }
